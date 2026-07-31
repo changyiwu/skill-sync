@@ -1,0 +1,10 @@
+desktop.ini
+*.tmp
+~$*
+.env
+*.key
+credentials.*
+.claude/settings.local.json
+
+# 交接檔含真實電腦名，只走 L1（雲端硬碟）跨機同步，不進公開 repo
+handoff.md
