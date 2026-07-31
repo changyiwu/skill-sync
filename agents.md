@@ -19,13 +19,18 @@
 
 對應到技能的三條鐵則與步驟 2／步驟 5。
 
+## 關鍵時程
+
+（無固定期限，依需要推進）
+
 ## 目標與路線圖
 
 - [x] 階段一：`sync-skills/SKILL.md` 成形（含 git 前置檢查、逐檔 hash 驗證、殘留檔偵測）
 - [x] 階段二：本專案自身初始化（agents.md ＋ CLAUDE.md ＋ handoff.md ＋ README.md）
 - [x] 階段三：把 `sync-skills` 安裝到四家技能目錄（`<電腦A>` 已裝，另兩台待補）
 - [x] 階段四：git init ＋ GitHub repo（L2，公開）
-- [ ] 階段五：跨電腦實測（另一台電腦跑「同步技能」）
+- [x] 階段五：建立 L3 Obsidian 專案筆記
+- [ ] 階段六：跨電腦實測（另一台電腦跑「同步技能」）
 
 ## 資料夾結構
 
@@ -40,17 +45,19 @@ skill-sync/
    └─ SKILL.md        # 「同步技能」技能
 ```
 
-## 同步層級
+## 同步層級（本專案初始化至第 3 層級）
 
 | 層級 | 平台 | 位置 | 讀取時機 |
 |------|------|------|---------|
 | L1 | 本地（GDrive） | `agents.md`＋`handoff.md`＋`CLAUDE.md`（橋接） | 每個 session |
 | L2 | GitHub | https://github.com/changyiwu/skill-sync （公開） | 指定時 |
-| L3 | Obsidian | 尚未建立 | — |
+| L3 | Obsidian | `skill-sync/專案工作流程.md` | 有需要時 |
 
 ## 工作約定
 
 - 任何 Agent、任何電腦：**開工先讀 `handoff.md`，收工必更新 `handoff.md`**
+- 修改共用檔案前先讀最新內容，避免覆蓋其他 Agent 的變更
+- 修改前先確認計畫，優先保留原有資料結構
 - 所有回應與文件使用繁體中文
 - **本資料夾是技能原始檔**。改動一律改這裡，改完在本專案說「同步技能」覆蓋四份安裝副本
 - 編輯 `SKILL.md` 時不可存成含 BOM 的 UTF-8，否則 frontmatter 解析失敗、技能觸發不了
@@ -66,3 +73,4 @@ skill-sync/
 ## 最近進度
 
 - 2026-07-31（`<電腦A>`）：專案建立。`sync-skills/SKILL.md` 從 `cross-device-agent-skills/README.md` 的 `Copy-Item` 段抽出並擴充：新增源檔可信度的 git 判讀表、逐檔遞迴 hash 驗證、副本殘留檔偵測、chezmoi 善後提醒。同日裝進本機四家技能目錄並實跑一次（含三技能共 16 項 hash 全 `OK`），`git init` ＋ 建立公開 repo `changyiwu/skill-sync` 並推送。
+- 2026-07-31（`<電腦A>`）：重跑 `project-init`，L1 三個檔依最新範本重建（補上「關鍵時程」與範本版工作約定條目），並補建 L3 Obsidian 專案筆記，三個層級到齊。
