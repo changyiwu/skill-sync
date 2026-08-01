@@ -159,11 +159,24 @@ Copy-Item -Path (Join-Path '<來源絕對路徑>' '*') -Destination $t -Recurse 
 
 ```powershell
 foreach ($p in $plan) {
-  Copy-Item -Path (Join-Path $p.Source '*') -Destination $p.Target -Recurse -Force
+  Get-ChildItem $p.Source -Recurse -File -Force | ForEach-Object {
+    $rel = $_.FullName.Substring($p.Source.Length + 1)
+    if ("\$rel" -match $skip) { return }                  # 沿用步驟 1 的排除規則
+    $dst = Join-Path $p.Target $rel
+    New-Item -ItemType Directory (Split-Path $dst -Parent) -Force | Out-Null
+    Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
+  }
 }
 ```
 
-⚠️ **一定要用「複製內容」的 `\*` 寫法，不可以複製資料夾本身。**目標目錄已存在時，`Copy-Item <來源資料夾> <目標資料夾>` 會把來源**塞進目標裡面**變成巢狀（`claude-draw\08-draw\`），而目標原本那份 `SKILL.md` 完全沒被更新——實測證實過。`\*` 寫法才是把內容覆蓋上去，且 `-Force` 會一併複製隱藏檔。
+**為什麼是「列舉再逐檔複製」，而不是一行 `Copy-Item -Recurse`**——兩種直覺寫法各有一個坑：
+
+- `Copy-Item <來源資料夾> <目標資料夾> -Recurse`：目標已存在時會把來源**塞進目標裡面**變成巢狀（`claude-draw\08-draw\`），而目標原本那份 `SKILL.md` 完全沒被更新。實測證實過，且不會有任何錯誤訊息。
+- `Copy-Item "<來源>\*" -Recurse`：覆蓋位置正確，但**表達不了巢狀排除**（`-Exclude` 只比對檔名末段，跟 `-Recurse` 併用行為不可靠），於是 `__pycache__`、`.venv` 這類每台機器自己產生的衍生物會一起被複製，然後在步驟 6 永遠報不一致。
+
+逐檔複製兩個坑都沒有，而且仍然是 `Copy-Item` 從磁碟複製，鐵則 1 不受影響。`-Force` 讓隱藏檔也複製得到。
+
+⚠️ **`$skip` 一定要比對「相對路徑」，不能比對 `FullName`。**拿 `FullName` 去比的話，一個放在 `D:\build\my-skill\` 的專案會因為路徑裡有 `\build\` 而整包被排除——失敗方式是「什麼都沒複製，但也沒報錯」，比複製錯還難發現。
 
 ## 步驟 6：驗證（逐檔 hash，不可省略）
 
@@ -171,10 +184,12 @@ foreach ($p in $plan) {
 foreach ($p in $plan) {
   $sMap = @{}; $tMap = @{}
   Get-ChildItem $p.Source -Recurse -File -Force | ForEach-Object {
-    $sMap[$_.FullName.Substring($p.Source.Length + 1)] = (Get-FileHash $_.FullName).Hash
+    $rel = $_.FullName.Substring($p.Source.Length + 1)
+    if ("\$rel" -notmatch $skip) { $sMap[$rel] = (Get-FileHash $_.FullName).Hash }
   }
   Get-ChildItem $p.Target -Recurse -File -Force | ForEach-Object {
-    $tMap[$_.FullName.Substring($p.Target.Length + 1)] = (Get-FileHash $_.FullName).Hash
+    $rel = $_.FullName.Substring($p.Target.Length + 1)
+    if ("\$rel" -notmatch $skip) { $tMap[$rel] = (Get-FileHash $_.FullName).Hash }
   }
   $bad   = @($sMap.Keys | Where-Object { $tMap[$_] -ne $sMap[$_] })
   $extra = @($tMap.Keys | Where-Object { -not $sMap.ContainsKey($_) })
@@ -184,7 +199,9 @@ foreach ($p in $plan) {
 }
 ```
 
-`Get-ChildItem` 兩邊都要加 `-Force`，否則隱藏檔複製了卻不在比對範圍內。兩種不一致要分開看：
+`Get-ChildItem` 兩邊都要加 `-Force`，否則隱藏檔複製了卻不在比對範圍內。**兩邊也都要套 `$skip`**，而且要跟步驟 5 用同一套規則——複製時排除、比對時不排除的話，`__pycache__` 這類衍生物會被算成「副本多出」，每次都誤報。誤報會訓練人忽略警告，那比沒有檢查更危險。
+
+兩種不一致要分開看：
 
 - **內容差異**：複製失敗，或檔案被鎖住。重跑步驟 5，還是不行就檢查是不是有 Agent／編輯器開著那個檔
 - **副本多出**：原始檔已經**刪掉**的檔案還留在副本裡；若出現一個「跟來源資料夾同名的子資料夾」（例 `claude-draw\08-draw`），那就是踩到步驟 5 的巢狀陷阱。`Copy-Item -Force` 只覆蓋、不刪除，這種殘留要手動 `Remove-Item` 清掉（清之前先念給使用者確認）

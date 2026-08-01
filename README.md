@@ -56,8 +56,8 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 1. **遞迴**找出這個專案裡的 `SKILL.md`（技能常放在 `skills/` 子資料夾），讀每份的 frontmatter `name:` 當安裝名，把「來源資料夾 → 安裝名」對照念給你確認
 2. 跑 `git diff HEAD --stat` 與 `git rev-list --left-right --count 'HEAD...@{u}'` 判斷源檔可不可信（落後遠端就停下來）
 3. 規劃同步矩陣：**某個技能在哪幾家已經裝過，就只覆蓋那幾家**；沒裝的讀跨電腦清單分成「只有這台沒裝」與「都沒裝」兩類，列出來問你要不要首裝
-4. 用 `Copy-Item "<來源>\*" -Destination <目標> -Recurse -Force` 覆蓋內容
-5. 逐檔遞迴 hash 比對（含隱藏檔），分開回報「內容差異」與「副本多出的殘留檔」
+4. 逐檔 `Copy-Item` 覆蓋內容，排除 `__pycache__`、`.venv`、`node_modules` 等每台機器自己產生的衍生物
+5. 逐檔遞迴 hash 比對（含隱藏檔、套用同一套排除規則），分開回報「內容差異」與「副本多出的殘留檔」
 6. 更新這台的安裝清單快照（見下節）
 7. 提醒 chezmoi 善後（`Copy-Item` 繞過 chezmoi 直接寫 target，同步完 `chezmoi status` 必然報出這些技能，正解是 `chezmoi add --recursive` 不是 `apply`）
 
@@ -106,7 +106,8 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 
 ## 注意事項
 
-- **`Copy-Item` 一定要用複製內容的 `\*` 寫法**。目標目錄已存在時，`Copy-Item <來源資料夾> <目標資料夾>` 會把來源塞進目標裡面變成巢狀（`claude-draw\08-draw\`），而目標原本那份 `SKILL.md` 完全沒被更新
+- **複製要「列舉再逐檔」，不能寫成一行 `Copy-Item -Recurse`**。資料夾寫法在目標已存在時會把來源塞進目標裡變成巢狀（`claude-draw\08-draw\`），而目標原本那份 `SKILL.md` 完全沒被更新；`"<來源>\*"` 寫法覆蓋位置正確，但表達不了巢狀排除，於是 `__pycache__` 這類衍生物會跟著複製、然後永遠報不一致
+- **排除規則要比對「相對路徑」，不是 `FullName`**。拿 `FullName` 去比的話，一個放在 `D:\build\my-skill\` 的專案會因為路徑含 `\build\` 而整包被排除——而且是「什麼都沒複製，但也沒報錯」
 - **占位符要填在原始檔**。若做法是「原始檔留 `<你的帳號>`、裝好才在副本裡替換」，hash 比對會每次都報不一致
 - 編輯 `SKILL.md` 不可存成含 BOM 的 UTF-8，否則 frontmatter 解析失敗、技能觸發不了，安裝名也會讀成空字串。`Copy-Item` 是位元組複製，不會改變編碼——BOM 只會在編輯原始檔時出問題
 - `'@{u}'` 在 PowerShell 一定要單引號包起來，裸的 `@{` 會被當成 hashtable 語法直接噴解析錯誤
