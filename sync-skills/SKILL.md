@@ -123,6 +123,7 @@ while ($p) {
   if (Test-Path $c) { $manifestDir = $c; break }
   $p = $p.Parent
 }
+$STALE_DAYS = 30
 $peers = @()
 if ($manifestDir) {
   $peers = @(Get-ChildItem $manifestDir -Filter '*.json' -File |
@@ -130,18 +131,40 @@ if ($manifestDir) {
              ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json })
 }
 
+# 每台的資料有多舊？別台清單只有「別台自己跑同步」時才會更新
+foreach ($pm in $peers) {
+  try { $d = [datetime]::ParseExact($pm.updated, 'yyyy-MM-dd HH:mm',
+              [Globalization.CultureInfo]::InvariantCulture) }
+  catch { $d = $null }
+  $age = if ($d) { [int]((Get-Date) - $d).TotalDays } else { $null }
+  $pm | Add-Member -NotePropertyName AgeDays -NotePropertyValue $age -Force
+  $tag = if ($null -eq $age) { '⚠️ 時間格式無法解讀' }
+         elseif ($age -gt $STALE_DAYS) { "⚠️ $age 天前，可能已過時" }
+         else { "$age 天前" }
+  "🖥️ {0,-14} {1}　({2})" -f $pm.computer, $pm.updated, $tag
+}
+if (-not $peers) { "🖥️ 清單裡只有這台，沒有別台的資料可比對" }
+
 foreach ($s in $skills) {
   $n = $s.InstallName
   if ($plan | Where-Object { $_.Name -eq $n }) { continue }
   $on = @(foreach ($pm in $peers) {
     foreach ($t in $pm.tools.PSObject.Properties) {
-      if ($t.Value.installed -and ($t.Value.skills -contains $n)) { "$($pm.computer)/$($t.Name)" }
+      if ($t.Value.installed -and ($t.Value.skills -contains $n)) {
+        "$($pm.computer)/$($t.Name)" + $(if ($null -eq $pm.AgeDays -or $pm.AgeDays -gt $STALE_DAYS) { '(舊資料)' })
+      }
     }
   })
   if ($on) { "⚠️ 只有這台沒裝：{0} -> {1}（別台有：{2}）" -f $s.Folder, $n, ($on -join '、') }
   else     { "⏭️ 都沒裝：{0} -> {1}" -f $s.Folder, $n }
 }
 ```
+
+⚠️ **別台清單的新舊要講出來，不能只講內容。**清單只有「那台自己跑同步」時才更新，所以一台三個月沒跑同步的電腦，讀到的是三個月前的樣子。不標示時間的話，「別台都沒裝」跟「別台的資料太舊、看不出裝了沒」會長得一模一樣——而後者不該被當成「可以放心不裝」的依據。
+
+`updated` 是**那台電腦自己的時鐘**寫的，時區或系統時間不對會讓天數失真；當成粗略提示看，不要拿來做精確判斷。
+
+⚠️ **日期解析用 `try/catch` ＋ `ParseExact`，不要用 `TryParseExact`。**PowerShell 綁不上它的 5 參數多載（`[ref]$d` 需要 `$d` 已具型別），會對**每一台**都丟 `MethodException`；而 catch 不到的例外會讓 `$age` 全部變 `$null`、**所有電腦一律被標成「時間格式無法解讀」＋`(舊資料)`**——連 3 天前的新資料也一樣。這種「安全方向的誤報」最難發現，因為畫面上看起來只是比較保守。實測踩過。
 
 `$manifestDir` 找不到（沒有任何電腦寫過清單）→ 不是錯誤，全部歸到「都沒裝」，並在回報時說明「這台是第一台建立清單的電腦」。
 
@@ -251,7 +274,9 @@ if ($manifestDir) {
    OpenCode       目錄不存在，略過（這台沒裝）
 ⚠️ 只有這台沒裝（別台有，可能是漏掉）：claude-draw（<電腦B>/Claude Code）
 ⏭️ 都沒裝（含其他電腦，八成是刻意的）：claude-supabase、claude-ollama
-🗂️ 安裝清單：已更新 <電腦名>.json（已知電腦：<電腦A>、<電腦B>）
+🗂️ 安裝清單：已更新 <電腦名>.json
+   <電腦B>  2026-07-15 09:20（17 天前）
+   <電腦C>  2026-04-02 11:05（⚠️ 121 天前，可能已過時）
 ✅ 全部一致 ／ ⚠️ <N> 項不一致：<明細與建議>
 ```
 
