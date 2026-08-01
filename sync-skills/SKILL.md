@@ -16,6 +16,13 @@ description: 技能副本同步助手。當使用者說「同步技能」、「�
 3. **同步後一定要驗**。沒跑逐檔 hash 比對就回報「已同步」，等於沒同步。
 4. **安裝名取自 `SKILL.md` 的 `name:`，不是資料夾名**。兩者不同的技能（改名安裝）若照資料夾名同步，會在目標目錄旁邊生出一份沒人載入的孤兒副本，而真正被載入的那份繼續留在舊版——比不同步更難發現。
 
+   **這是四家工具的硬性要求，不是本技能的偏好**：安裝後的資料夾名必須與 frontmatter `name` 一致。OpenCode 明文規定 `name` 要與所在資料夾同名（1–64 字元、小寫英數與連字號）；Claude Code 拿資料夾名當 `/指令` 名稱；Antigravity 的 `name` 選填、未填時**預設用資料夾名**；Codex 兩欄都必填。照來源資料夾名安裝，會裝出 `~/.claude/skills/02-github/` 裡面寫 `name: github` 這種自相矛盾的組合——OpenCode 直接不收，Claude 的指令會變成 `/02-github`。
+   用 `name:` 決定安裝名，產生的結果剛好就是「安裝後資料夾名 == `name`」，正是四家都要的狀態。
+
+   **來源資料夾是 repo 給人看的組織方式，`name` 才是 agent 認的身分**——兩者服務不同目的，不該合併。實測（2026-08-02，`我的雲端硬碟/agents/`）：57 個 `SKILL.md` 裡有 **36 個**資料夾名 ≠ `name`，多數是懶人包的編號資料夾（`02-github` → `github`／`claude-github`），少數是 `<專案>/skill/` 這種泛用資料夾名。改用資料夾名會一次弄壞這 36 個。
+
+   > 官方依據：[Claude Code Skills](https://code.claude.com/docs/en/skills)、[Codex Build skills](https://learn.chatgpt.com/docs/build-skills.md)、[OpenCode Agent Skills](https://opencode.ai/docs/skills/)、[Antigravity Skills](https://antigravity.google/docs/skills)
+
 ## 步驟 1：偵測來源技能
 
 來源＝使用者當下的專案根目錄（沒講就用當前工作目錄；不確定就問）。技能可能在**任意深度**（很多技能包放在 `skills/` 子資料夾），所以要遞迴找 `SKILL.md`：
