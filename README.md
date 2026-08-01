@@ -55,10 +55,11 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 
 1. **遞迴**找出這個專案裡的 `SKILL.md`（技能常放在 `skills/` 子資料夾），讀每份的 frontmatter `name:` 當安裝名，把「來源資料夾 → 安裝名」對照念給你確認
 2. 跑 `git diff HEAD --stat` 與 `git rev-list --left-right --count 'HEAD...@{u}'` 判斷源檔可不可信（落後遠端就停下來）
-3. 規劃同步矩陣：**某個技能在哪幾家已經裝過，就只覆蓋那幾家**；四家都沒裝的列出來問你要不要首裝
+3. 規劃同步矩陣：**某個技能在哪幾家已經裝過，就只覆蓋那幾家**；沒裝的讀跨電腦清單分成「只有這台沒裝」與「都沒裝」兩類，列出來問你要不要首裝
 4. 用 `Copy-Item "<來源>\*" -Destination <目標> -Recurse -Force` 覆蓋內容
 5. 逐檔遞迴 hash 比對（含隱藏檔），分開回報「內容差異」與「副本多出的殘留檔」
-6. 提醒 chezmoi 善後（`Copy-Item` 繞過 chezmoi 直接寫 target，同步完 `chezmoi status` 必然報出這些技能，正解是 `chezmoi add --recursive` 不是 `apply`）
+6. 更新這台的安裝清單快照（見下節）
+7. 提醒 chezmoi 善後（`Copy-Item` 繞過 chezmoi 直接寫 target，同步完 `chezmoi status` 必然報出這些技能，正解是 `chezmoi add --recursive` 不是 `apply`）
 
 ### 為什麼是「只覆蓋已存在的副本」
 
@@ -68,6 +69,40 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 ### 為什麼安裝名可以自動推導
 
 因為各家工具都要求「資料夾名 ＝ `SKILL.md` 的 `name:`」，所以對照關係本來就寫在源檔裡，不需要另外手維護一張會過期的對照表。本機 42 項安裝副本實測 42/42 成立。
+
+## 跨電腦安裝清單
+
+四個安裝目錄是**每台電腦各自一份**，不跟著雲端硬碟或 git 走。所以「這台沒裝」有兩種意思，而且該做的事完全相反：
+
+- **別台裝了、只有這台漏掉** → 該補
+- **所有電腦都沒裝** → 八成是刻意的，不要動
+
+技能每次跑完會把「這台四個目錄現在裝了什麼」寫成一份快照，讓其他電腦分辨得出來：
+
+```
+<專案的上層共用資料夾>/.skill-install/<電腦名>.json
+```
+
+```json
+{
+  "computer": "PC-YI-FY",
+  "updated": "2026-08-01 21:04",
+  "generatedBy": "sync-skills",
+  "tools": {
+    "Claude Code": { "installed": true, "skills": ["claude-draw", "..."] },
+    "Antigravity": { "installed": false, "skills": [] }
+  }
+}
+```
+
+四個設計要點：
+
+- **一台一個檔，檔名就是電腦名**——各台只寫自己那份，不會互相覆蓋，不需要合併
+- **不在任何 repo 裡**。它必須帶真實電腦名才有用，而技能 repo 多半公開；所以放專案的**上層**共用資料夾，靠雲端硬碟跨機同步。技能是往上找 `.skill-install/`，第一次要自己建一個
+- **快照的是四個目錄的全部內容**，不只這次同步的技能。所以在任何一個專案跑，寫出來的都是這台的機器全貌
+- **只記「有沒有裝」，不記版本或 hash**。版本的唯一權威是 git 上的來源；清單若也記版本，就多出一個會過期的事實來源
+
+讀到別台有、這台沒有的技能時，技能只會**列出來問**，不會自動補裝——跟「來源有、四家都沒裝」一樣的原則。
 
 ## 注意事項
 

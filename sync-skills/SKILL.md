@@ -1,6 +1,6 @@
 ---
 name: sync-skills
-description: 技能副本同步助手。當使用者說「同步技能」、「同步技能副本」、「技能同步」、「把技能複製到四個 agent」、「更新技能安裝副本」、「技能改完了幫我同步」等任何要把專案裡的技能原始檔覆蓋到 Claude Code／Codex／OpenCode／Antigravity 全域技能目錄的請求時，請一定要使用此技能。本技能會遞迴找出專案裡的技能、以 frontmatter 的 name 決定安裝名（改名安裝的技能也涵蓋）、先用 git 驗證原始檔可信（防雲端硬碟餵出過期內容）、只用 Copy-Item 從磁碟複製、最後逐檔 hash 比對證明副本真的一致。
+description: 技能副本同步助手。當使用者說「同步技能」、「同步技能副本」、「技能同步」、「把技能複製到四個 agent」、「更新技能安裝副本」、「技能改完了幫我同步」等任何要把專案裡的技能原始檔覆蓋到 Claude Code／Codex／OpenCode／Antigravity 全域技能目錄的請求時，請一定要使用此技能。本技能會遞迴找出專案裡的技能、以 frontmatter 的 name 決定安裝名（改名安裝的技能也涵蓋）、先用 git 驗證原始檔可信（防雲端硬碟餵出過期內容）、只用 Copy-Item 從磁碟複製、逐檔 hash 比對證明副本真的一致，並維護一份跨電腦的安裝清單，指出「只有這台沒裝」的技能。
 ---
 
 # 技能副本同步助手
@@ -103,8 +103,6 @@ $plan = foreach ($s in $skills) {
   }
 }
 $plan | Format-Table Tool, Name -AutoSize
-$skills | Where-Object { $n = $_.InstallName; -not ($plan | Where-Object { $_.Name -eq $n }) } |
-  ForEach-Object { "未安裝：{0} -> {1}" -f $_.Folder, $_.InstallName }
 ```
 
 **規則：某個技能在哪幾家已經裝過，就只覆蓋那幾家。**理由：
@@ -112,7 +110,44 @@ $skills | Where-Object { $n = $_.InstallName; -not ($plan | Where-Object { $_.Na
 - 很多技能包是**綁單一工具**的（`codex-*` 只該進 Codex 目錄）。無條件四家全裝會把 `codex-draw` 塞進 Claude Code，比落後更糟。
 - 來源裡有、但四家都沒裝的技能，通常是使用者**刻意沒裝**。自動補裝等於推翻使用者的選擇。
 
-所以「未安裝」的那幾項要**列出來問**使用者要不要首裝，不要自己決定。使用者說要，才建目錄再複製：
+### 用其他電腦的安裝清單分類「未安裝」
+
+四個安裝目錄是**每台電腦各自一份**，不會跨機同步。所以「這台沒裝」有兩種完全不同的意思，要分開講：**別台裝了、只有這台漏掉**（該補）vs **所有電腦都沒裝**（八成是刻意的）。分辨方式是讀其他電腦留下的清單（寫入見步驟 7）：
+
+```powershell
+$me = $env:COMPUTERNAME
+$manifestDir = $null
+$p = (Get-Item $src).Parent
+while ($p) {
+  $c = Join-Path $p.FullName '.skill-install'
+  if (Test-Path $c) { $manifestDir = $c; break }
+  $p = $p.Parent
+}
+$peers = @()
+if ($manifestDir) {
+  $peers = @(Get-ChildItem $manifestDir -Filter '*.json' -File |
+             Where-Object { $_.BaseName -ne $me } |
+             ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json })
+}
+
+foreach ($s in $skills) {
+  $n = $s.InstallName
+  if ($plan | Where-Object { $_.Name -eq $n }) { continue }
+  $on = @(foreach ($pm in $peers) {
+    foreach ($t in $pm.tools.PSObject.Properties) {
+      if ($t.Value.installed -and ($t.Value.skills -contains $n)) { "$($pm.computer)/$($t.Name)" }
+    }
+  })
+  if ($on) { "⚠️ 只有這台沒裝：{0} -> {1}（別台有：{2}）" -f $s.Folder, $n, ($on -join '、') }
+  else     { "⏭️ 都沒裝：{0} -> {1}" -f $s.Folder, $n }
+}
+```
+
+`$manifestDir` 找不到（沒有任何電腦寫過清單）→ 不是錯誤，全部歸到「都沒裝」，並在回報時說明「這台是第一台建立清單的電腦」。
+
+⚠️ **清單只記「有沒有裝」，不記版本或 hash。**版本的唯一權威是 git 上的來源；若清單也記版本，就會多出一個會過期的事實來源，變成階段七剛根治的那種病。「別台比較新」這種判斷一律回去問來源，不要問別台。
+
+兩類都要**列出來問**使用者，不要自己決定要不要裝。使用者說要，才建目錄再複製：
 
 ```powershell
 $t = Join-Path $dests['Claude Code'] '<安裝名>'
@@ -154,7 +189,41 @@ foreach ($p in $plan) {
 - **內容差異**：複製失敗，或檔案被鎖住。重跑步驟 5，還是不行就檢查是不是有 Agent／編輯器開著那個檔
 - **副本多出**：原始檔已經**刪掉**的檔案還留在副本裡；若出現一個「跟來源資料夾同名的子資料夾」（例 `claude-draw\08-draw`），那就是踩到步驟 5 的巢狀陷阱。`Copy-Item -Force` 只覆蓋、不刪除，這種殘留要手動 `Remove-Item` 清掉（清之前先念給使用者確認）
 
-## 步驟 7：回報
+## 步驟 7：更新本機安裝清單
+
+驗證跑完後，把「這台電腦四個目錄現在裝了什麼」寫成一份快照，給**其他電腦**的步驟 4 讀：
+
+```powershell
+if ($manifestDir) {
+  $snapshot = [ordered]@{}
+  foreach ($d in $dests.GetEnumerator()) {
+    $exists = Test-Path $d.Value
+    $snapshot[$d.Key] = [ordered]@{
+      installed = $exists
+      skills    = if ($exists) { @(Get-ChildItem $d.Value -Directory | Select-Object -ExpandProperty Name | Sort-Object) } else { @() }
+    }
+  }
+  $doc = [ordered]@{
+    computer    = $me
+    updated     = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+    generatedBy = 'sync-skills'
+    tools       = $snapshot
+  }
+  $out = Join-Path $manifestDir "$me.json"
+  [IO.File]::WriteAllText($out, ($doc | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+  "已更新安裝清單：$out"
+}
+```
+
+三個要點：
+
+- **快照的是四個目錄的全部內容，不只這次同步的技能。**所以不管在哪個專案跑，寫出來的都是這台的機器全貌；別台只要讀到任何一份，就知道你這台裝了什麼。
+- **一台一個檔，檔名就是電腦名。**各台只寫自己那份，永遠不會互相覆蓋，也不需要合併。
+- **清單放在專案的「上層共用資料夾」，不在任何 repo 裡**（步驟 4 是往上找 `.skill-install/`）。理由是它必須帶真實電腦名才有用，而那些技能 repo 多半是公開的。跨機同步靠雲端硬碟，跟 `handoff.md` 同一套做法。第一次要手動建：`New-Item -ItemType Directory '<專案的上層資料夾>\.skill-install'`。
+
+⚠️ 用 `[IO.File]::WriteAllText(..., UTF8Encoding($false))` 寫、不要用 `Set-Content -Encoding UTF8`——後者在 PowerShell 5.1 會加 BOM。
+
+## 步驟 8：回報
 
 ```
 📦 來源：<專案資料夾名>（<N> 個技能）
@@ -163,13 +232,15 @@ foreach ($p in $plan) {
    Claude Code    claude-draw      OK（4 檔）      ← 來源 skills\08-draw
    Codex          codex-draw       OK（4 檔）
    OpenCode       目錄不存在，略過（這台沒裝）
-⏭️ 未安裝（四家都沒有，要首裝再說）：claude-supabase、claude-ollama
+⚠️ 只有這台沒裝（別台有，可能是漏掉）：claude-draw（<電腦B>/Claude Code）
+⏭️ 都沒裝（含其他電腦，八成是刻意的）：claude-supabase、claude-ollama
+🗂️ 安裝清單：已更新 <電腦名>.json（已知電腦：<電腦A>、<電腦B>）
 ✅ 全部一致 ／ ⚠️ <N> 項不一致：<明細與建議>
 ```
 
 來源資料夾名與安裝名不同的，回報時**兩個都要寫**——不然使用者看不出哪個源檔對到哪個副本。
 
-## 步驟 8：善後提醒
+## 步驟 9：善後提醒
 
 - 有用 **chezmoi** 管 dotfile 的話：`Copy-Item` 是**繞過 chezmoi 直接寫 target**，所以同步完 `chezmoi status` 第一欄**必然**出現這些技能。這是正常的，正解是 `chezmoi add --recursive` 收進來源再 commit + push，**不是 `apply`**（那會拿舊的 source 蓋掉剛同步好的新版）
 - 源檔這次有改動但還沒 commit／push 的話，提醒使用者收工前補上
@@ -180,7 +251,9 @@ foreach ($p in $plan) {
 - ❌ 跳過步驟 2 直接複製（可能把所有副本一起降版）
 - ❌ 跳過步驟 6 就說「已同步」
 - ❌ 拿**資料夾名**當安裝名（鐵則 4）
-- ❌ 把來源有、但四家都沒裝的技能自動補裝（步驟 4）
+- ❌ 把來源有、但四家都沒裝的技能自動補裝（步驟 4）——**包括「別台有裝」的那些**，那只是提示，不是授權
+- ❌ 拿別台的安裝清單當**版本**依據（清單只記有沒有裝，版本一律問 git）
+- ❌ 把 `.skill-install/` commit 進 repo（裡面是真實電腦名，而技能 repo 多半公開）
 - ❌ 目標目錄不存在時自己 `New-Item` 建起來（那台沒裝那個工具，建了只是留垃圾）
 - ❌ 擅自 `git pull`／`git commit`／`git push`（本技能只讀 git 狀態，不動 git）
 - ❌ 順手「修正」原始檔的內容（同步就只是同步）
