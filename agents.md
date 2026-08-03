@@ -111,8 +111,6 @@ skill-sync/
 - 所有回應與文件使用繁體中文
 - **本資料夾是技能原始檔**。改動一律改這裡，改完在本專案說「同步技能」覆蓋四份安裝副本
 - 編輯 `SKILL.md` 時不可存成含 BOM 的 UTF-8，否則 frontmatter 解析失敗、技能觸發不了
-- **這是公開 repo**：進 git 的檔案（`README.md`／`agents.md`／`CLAUDE.md`／`SKILL.md`）一律不寫本機絕對路徑，電腦名一律用 `<電腦A>`／`<電腦B>`／`<電腦C>` 占位符
-- `handoff.md` 已 gitignore，是唯一保留真實電腦名的檔案——因為「上次在哪台收工」是它的核心功能（`startup` 技能會拿它跟 `$env:COMPUTERNAME` 比對），寫占位符就失效。跨電腦靠 L1 雲端硬碟同步，不靠 git
 - 這個技能的鐵則同樣約束改它的人：**副本一律 `Copy-Item` 從磁碟複製**，絕不可用 Write/Edit 重建
 
 ## 相關專案
