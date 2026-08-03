@@ -54,10 +54,10 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 技能會：
 
 1. **遞迴**找出這個專案裡的 `SKILL.md`（技能常放在 `skills/` 子資料夾），讀每份的 frontmatter `name:` 當安裝名，把「來源資料夾 → 安裝名」對照念給你確認
-2. 跑 `git diff HEAD --stat` 與 `git rev-list --left-right --count 'HEAD...@{u}'` 判斷源檔可不可信（落後遠端就停下來）
+2. 先 `git fetch`，再跑 `git diff HEAD --stat` 與 `git rev-list --left-right --count 'HEAD...@{u}'` 判斷源檔可不可信（落後遠端就停下來）。**不 fetch 的話 `@{u}` 是上次 fetch 的舊快照，落後根本測不出來**
 3. 規劃同步矩陣：**某個技能在哪幾家已經裝過，就只覆蓋那幾家**；沒裝的讀跨電腦清單分成「只有這台沒裝」與「都沒裝」兩類，列出來問你要不要首裝
 4. 逐檔 `Copy-Item` 覆蓋內容，排除 `__pycache__`、`.venv`、`node_modules` 等每台機器自己產生的衍生物
-5. 逐檔遞迴 hash 比對（含隱藏檔、套用同一套排除規則），分開回報「內容差異」與「副本多出的殘留檔」
+5. 逐檔遞迴 hash 比對（含隱藏檔、套用同一套排除規則），分開回報「內容差異」與「副本多出的殘留檔」；報出差異的檔案再做一次去 BOM ＋ CRLF→LF 的正規化比對，把「僅換行／BOM 差異」從真正的落後裡拆出來
 6. 更新這台的安裝清單快照（見下節）
 7. 提醒 chezmoi 善後（`Copy-Item` 繞過 chezmoi 直接寫 target，同步完 `chezmoi status` 必然報出這些技能，正解是 `chezmoi add --recursive` 不是 `apply`）
 
@@ -68,7 +68,7 @@ foreach ($d in "$HOME\.claude\skills","$HOME\.agents\skills","$HOME\.config\open
 
 ### 為什麼安裝名可以自動推導
 
-因為各家工具都要求「資料夾名 ＝ `SKILL.md` 的 `name:`」，所以對照關係本來就寫在源檔裡，不需要另外手維護一張會過期的對照表。本機 42 項安裝副本實測 42/42 成立。
+因為各家工具都要求「資料夾名 ＝ `SKILL.md` 的 `name:`」，所以對照關係本來就寫在源檔裡，不需要另外手維護一張會過期的對照表。實測（2026-08-02，57 個源檔／42 項安裝副本）42/42 成立，而其中 36 個源檔的資料夾名跟 `name:` 並不相同——照資料夾名安裝會一次弄壞那 36 個。
 
 ## 跨電腦安裝清單
 

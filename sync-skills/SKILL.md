@@ -31,7 +31,7 @@ description: 技能副本同步助手。當使用者說「同步技能」、「�
 $src  = (Get-Location).Path
 $skip = '[\\/](\.git|node_modules|\.venv|venv|site-packages|generated|dist|build|__pycache__)[\\/]'
 $all  = @(Get-ChildItem $src -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue |
-          Where-Object { $_.FullName -notmatch $skip })
+          Where-Object { $_.FullName.Substring($src.Length) -notmatch $skip })   # 比相對路徑，不是 FullName
 $sub  = @($all | Where-Object { $_.Directory.FullName -ne $src } | Sort-Object { $_.FullName.Length })
 $pick = if ($sub.Count -gt 0) { $sub } else { @($all) }
 
@@ -58,6 +58,8 @@ $skills | Format-Table Folder, InstallName, Valid -AutoSize
 - **根目錄的 `SKILL.md` 是整包標記，不是技能**。技能包常在根目錄放一份介紹整包的 `SKILL.md`（例：`name: claude-code-lazy-packs`），它跟 `skills/` 是兄弟關係。只要子資料夾裡找得到技能，根目錄那份就略過；**只有**全專案找不到子技能時，才把根目錄自己當成單一技能（`rdq-skill/SKILL.md` 那種寫法）。
 - **`$skip` 不是可有可無**。實測會撈到安裝器產生的測試副本（`generated/`）與 Python 套件內建的技能（`site-packages/`），照同步等於拿垃圾覆蓋。
 
+⚠️ **`$skip` 一定要比對「相對路徑」（`.Substring($src.Length)`），不能比對 `FullName`。**這條在步驟 1、5、6 三個地方都成立。拿 `FullName` 去比的話，一個放在 `D:\build\my-skills\` 的專案，每個檔案的完整路徑都會命中 `\build\` 而被排除——步驟 1 的後果是**偵測到 0 個技能、而且不報錯**（實測驗證過）。失敗方式是「什麼都沒發生」，比複製錯還難發現。
+
 把 `Folder → InstallName` 對照念給使用者確認，再往下走。有 `Valid` 為 `False` 的（`name:` 有空白或中文，不能當資料夾名）→ **停下來**問使用者那一項該裝成什麼名字，或是否根本不該全域安裝。
 
 有子技能或範本資料夾（例如 `templates/`）不用另外處理——步驟 5 是整個資料夾遞迴複製。
@@ -65,22 +67,38 @@ $skills | Format-Table Folder, InstallName, Valid -AutoSize
 ## 步驟 2：源檔可信度檢查（git）
 
 ```powershell
+git fetch --quiet                                    # 不 fetch 的話，下一行的「落後」永遠測不出來
 git diff HEAD --stat
 git rev-list --left-right --count 'HEAD...@{u}'
 ```
 
 > `'@{u}'` 在 PowerShell **一定要單引號包起來**，裸的 `@{` 會被當成 hashtable 語法、直接噴解析錯誤。
 
+⚠️ **`git fetch` 不可省略。**`@{u}` 是**本機記錄的**遠端 ref，不 fetch 就是上次 fetch 那一刻的舊快照——於是判讀表裡「落後 > 0 就停下來」這道**唯一的硬關卡永遠不會亮**，而它正是鐵則 2 的執行機制。跨電腦專案裡「別台推了新版、這台還沒 pull」是常態，不是例外。
+
+`fetch` **不違反「本技能不動 git」**：它只更新 remote-tracking ref，不碰工作區、不碰 HEAD、不改任何檔案。真正禁止的是 `pull`／`commit`／`push`。fetch 失敗（離線、沒有遠端）不是錯誤，往下跑即可，但**回報時要註明「比的是上次 fetch 的狀態，可能看不出落後」**。
+
 輸出是 `<領先>	<落後>`（tab 分隔）。判讀：
 
 | 情況 | 怎麼做 |
 |------|--------|
-| worktree 乾淨、`0	0` | 源檔可信，往下跑 |
+| worktree 乾淨、`0	0` | 源檔可信，往下跑（但有一個例外，見下方 CRLF 警告） |
 | 有未 commit 的改動，且是使用者這次剛改的 | 正常，往下跑（同步的就是這些改動） |
 | 有**非預期**的改動（不是這次改的） | **停下來**問使用者：這些是什麼？要一起同步嗎？ |
 | **落後 > 0** | **停下來**。磁碟很可能是雲端硬碟餵出的舊 bytes，先 `git pull` 再回來 |
 | 領先 > 0 | 可往下跑，但回報時提醒「這些改動還沒 push」 |
 | 不是 git repo | 註明「**無法用 git 驗證來源**，只能相信磁碟內容」，問使用者要不要照跑 |
+
+⚠️ **這道檢查對「換行被改寫」完全無效，要知道自己守不住什麼。**Windows 上 git 預設的 `core.autocrlf=true` 會在 checkout 時把源檔寫成 CRLF，而 `git status` 比對索引時又轉回 LF——所以**磁碟上的源檔已經被改寫了，這裡照樣顯示乾淨**。整道檢查的設計前提是「git 說乾淨＝源檔可信」，這個前提在此失效。
+
+判斷方式：
+
+```powershell
+git config core.autocrlf                    # true 且下一行沒有 .gitattributes → 這條路開著
+Test-Path (Join-Path $src '.gitattributes')
+```
+
+兩者同時成立時，在回報裡講明「這個 repo 沒有 `.gitattributes` 且 `autocrlf=true`，源檔換行可能已被 checkout 改寫，步驟 6 若只有換行差異請往這個方向查」。**正解是在來源端補 `.gitattributes`（`* text=auto eol=lf`），不是在本技能裡做正規化比對**——正規化會讓比對對換行差異失明，而換行差異有時是真的要修的（副本被安裝器改寫過）。
 
 ## 步驟 3：偵測目標目錄
 
@@ -180,10 +198,18 @@ foreach ($s in $skills) {
 兩類都要**列出來問**使用者，不要自己決定要不要裝。使用者說要，才建目錄再複製：
 
 ```powershell
+$s = '<來源絕對路徑>'
 $t = Join-Path $dests['Claude Code'] '<安裝名>'
-New-Item -ItemType Directory $t -Force | Out-Null
-Copy-Item -Path (Join-Path '<來源絕對路徑>' '*') -Destination $t -Recurse -Force
+Get-ChildItem $s -Recurse -File -Force | ForEach-Object {      # 跟步驟 5 同一套寫法
+  $rel = $_.FullName.Substring($s.Length + 1)
+  if ("\$rel" -match $skip) { return }
+  $dst = Join-Path $t $rel
+  New-Item -ItemType Directory (Split-Path $dst -Parent) -Force | Out-Null
+  Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
+}
 ```
+
+首裝也要用逐檔迴圈，**不要圖方便寫成一行 `Copy-Item "<來源>\*" -Recurse`**——那個寫法表達不了巢狀排除，會把 `__pycache__` 這類衍生物一起裝進去（理由同步驟 5）。
 
 ## 步驟 5：複製
 
@@ -233,8 +259,47 @@ foreach ($p in $plan) {
 
 兩種不一致要分開看：
 
-- **內容差異**：複製失敗，或檔案被鎖住。重跑步驟 5，還是不行就檢查是不是有 Agent／編輯器開著那個檔
+- **內容差異**：複製失敗、檔案被鎖住，**或只是換行／BOM 不同**——三者的處置完全不同，往下走一步才知道是哪個
 - **副本多出**：原始檔已經**刪掉**的檔案還留在副本裡；若出現一個「跟來源資料夾同名的子資料夾」（例 `claude-draw\08-draw`），那就是踩到步驟 5 的巢狀陷阱。`Copy-Item -Force` 只覆蓋、不刪除，這種殘留要手動 `Remove-Item` 清掉（清之前先念給使用者確認）
+
+### 報出「內容差異」時，先分辨是內容還是表示法
+
+**hash 只會說「不同」，不會說「哪裡不同」。**照 hash 的結論當成內容落後去處理，會得出「這些技能落後了」的錯誤結論，並掩蓋真正的根因（`autocrlf`／安裝器改寫）。逐檔再判一次：
+
+```powershell
+function Get-FileFacts($p) {
+  $b   = [IO.File]::ReadAllBytes($p)
+  $bom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+  $off = if ($bom) { 3 } else { 0 }
+  $s   = [Text.Encoding]::UTF8.GetString($b, $off, $b.Length - $off)    # 用位移，不要切陣列（見下方警告）
+  $n   = [Text.Encoding]::UTF8.GetBytes(($s -replace "`r`n", "`n"))
+  [pscustomobject]@{
+    Bytes    = $b.Length - $off
+    BOM      = $bom
+    CRLF     = ([regex]::Matches($s, "`r`n")).Count
+    NormHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($n)) -replace '-', ''
+  }
+}
+
+foreach ($rel in $bad) {
+  $a = Get-FileFacts (Join-Path $p.Source $rel)
+  $c = Get-FileFacts (Join-Path $p.Target $rel)
+  $v = if ($a.NormHash -eq $c.NormHash) { '僅換行／BOM 差異' } else { '真內容差異' }
+  "  {0,-28} {1}　源:CRLF={2} BOM={3} {4}B ／ 副本:CRLF={5} BOM={6} {7}B" -f
+    $rel, $v, $a.CRLF, $a.BOM, $a.Bytes, $c.CRLF, $c.BOM, $c.Bytes
+}
+```
+
+判讀與處置：
+
+| 判定 | 意思 | 怎麼做 |
+|------|------|--------|
+| **真內容差異** | 複製失敗或檔案被鎖 | 重跑步驟 5；還是不行就查是不是有 Agent／編輯器開著那個檔 |
+| **僅換行／BOM 差異**，且副本是 CRLF | 副本被安裝器寫成 CRLF（如 `npx skills add`），或源檔被 `autocrlf` 改寫 | 先看步驟 2 的 `.gitattributes` 判斷。**內容其實一樣，不要當成落後**，但要在回報裡單獨列一類，別混進真正的不一致 |
+
+⚠️ **去 BOM 用「位移」，不要切陣列。**`$b = if (...) { $b[3..($b.Length-1)] } else { [byte[]]@() }` 看起來對，但 PowerShell 的 `if` 表達式會把空陣列展開成 `$null`，於是「只有 BOM 的空檔」會讓 `GetString` 丟 `Value cannot be null`——連 `[byte[]]` 型別標註都救不了。實測踩過，改用三參數多載就沒有這個邊界。
+
+⚠️ **量換行符不要用 PowerShell 管線。**`Out-String` 與管線本身會把輸出重新用 CRLF 接起來，量到的是行數不是內容——實測用 `git cat-file blob ... | Out-String` 數出過「blob 71 對工作區 20」的荒謬結果。上面的寫法直接讀 bytes 所以安全；要跟 git blob 比就用 Bash 的 `grep -c`。
 
 ## 步驟 7：更新本機安裝清單
 
@@ -274,11 +339,12 @@ if ($manifestDir) {
 
 ```
 📦 來源：<專案資料夾名>（<N> 個技能）
-🔍 源檔可信度：<git 乾淨且與遠端同步｜有 N 個未 push 的 commit｜非 git 專案>
+🔍 源檔可信度：<已 fetch，git 乾淨且與遠端同步｜有 N 個未 push 的 commit｜fetch 失敗（離線），比的是上次 fetch 的狀態｜非 git 專案>
 📋 同步結果：
    Claude Code    claude-draw      OK（4 檔）      ← 來源 skills\08-draw
    Codex          codex-draw       OK（4 檔）
    OpenCode       目錄不存在，略過（這台沒裝）
+📐 僅換行／BOM 差異（內容相同，非落後）：<檔案清單，或「無」>　← 有的話附成因判斷
 ⚠️ 只有這台沒裝（別台有，可能是漏掉）：claude-draw（<電腦B>/Claude Code）
 ⏭️ 都沒裝（含其他電腦，八成是刻意的）：claude-supabase、claude-ollama
 🗂️ 安裝清單：已更新 <電腦名>.json
@@ -304,7 +370,7 @@ if ($manifestDir) {
 - ❌ 拿別台的安裝清單當**版本**依據（清單只記有沒有裝，版本一律問 git）
 - ❌ 把 `.skill-install/` commit 進 repo（裡面是真實電腦名，而技能 repo 多半公開）
 - ❌ 目標目錄不存在時自己 `New-Item` 建起來（那台沒裝那個工具，建了只是留垃圾）
-- ❌ 擅自 `git pull`／`git commit`／`git push`（本技能只讀 git 狀態，不動 git）
+- ❌ 擅自 `git pull`／`git commit`／`git push`（本技能只讀 git 狀態，不動 git）。**`git fetch` 不在此列**——它只更新 remote-tracking ref，不碰工作區也不碰 HEAD，而且不跑它的話步驟 2 的落後偵測是失效的
 - ❌ 順手「修正」原始檔的內容（同步就只是同步）
 
 ## 注意事項
@@ -312,5 +378,5 @@ if ($manifestDir) {
 - 所有訊息使用**繁體中文**
 - **占位符要填在原始檔**。若做法是「原始檔留 `<你的帳號>` 占位符、裝好之後才在副本裡替換」，步驟 6 的 hash 比對會**每次都報不一致**。建議原始檔就填好本機的值，副本純粹是複製品
 - `SKILL.md` 不可存成含 BOM 的 UTF-8，否則 frontmatter 解析失敗、技能觸發不了。連帶地步驟 1 也會讀不到 `name:`、安裝名變空字串。`Copy-Item` 是位元組複製，不會改變編碼——BOM 問題只會在**編輯原始檔**時發生
-- 某些工具的安裝器（如 `npx skills add`）會把檔案寫成 CRLF，於是 hash 跟來源的 LF 版不同、步驟 6 報「內容差異」但內容其實一樣。確認只有換行差異的話可以不處理，但要在回報裡講清楚，別讓它混在真正的不一致裡
+- 換行差異有兩個來源：**安裝器把副本寫成 CRLF**（如 `npx skills add`），以及 **`autocrlf=true` 把源檔改寫成 CRLF**（步驟 2 那條警告）。兩者都會讓步驟 6 報「內容差異」而內容其實一樣——用步驟 6 的正規化比對分辨，並在回報裡單獨列一類
 - 本 skill 的**原始檔**在 `skill-sync/sync-skills/`（`skill-sync` 專案資料夾本身放哪由你決定，建議放雲端硬碟資料夾以便跨電腦同步）。這個技能自己也適用自己：改完在該專案說「同步技能」即可
