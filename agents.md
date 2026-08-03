@@ -36,7 +36,7 @@
 - [x] 階段八：跨電腦安裝清單（`.skill-install/<電腦名>.json`），分辨「只有這台沒裝」與「都沒裝」
 - [x] 階段九：修掉階段八盤點抓到的三個複製缺陷（衍生物排除改在技能內；另兩個從**來源端**根治）
 - [ ] （選作）階段十：回報加上反向指標「已安裝但四家都查無來源」，把目前混在「都沒裝」裡的「安裝名對不上」拆出來
-- [x] 階段十一：從**來源端**封住 CRLF 無聲改寫路徑（10 個含技能的 repo 補 `.gitattributes`）
+- [x] 階段十一：從**來源端**封住 CRLF 無聲改寫路徑（28 個 repo 補 `.gitattributes`，並寫進 `project-init` 讓新 repo 一建立就有）
 
 ## 資料夾結構
 
@@ -101,8 +101,8 @@ skill-sync/
 - **Firebase 這類「安裝時注入使用者金鑰」仍不相容**。`html-slide-builder` 的 `references/firebase-config.md` 在使用者設定 Firebase 時會被注入金鑰，那份就不等於源檔了。沒設定時（占位符原封不動）可正常同步——所以這是個**取決於使用者有沒有設定**的條件式限制，不是固定狀態。
 - **CRLF 有兩條進來的路，技能都擋不住，只能從來源端封**（階段十一）：
   1. **安裝器重寫檔案**。`agents-lazy-guide` 舊版 `install.ps1` 為了改寫 `name:` 做了 `-split "\r?\n"` ＋ `-join "\r\n"`，於是 7 個技能的副本全變 CRLF。這是〈已知限制〉第一項第二例的**副作用**：`2525c0a` 改成原樣 `Copy-Item` 之後就沒了。
-  2. **`core.autocrlf=true` 的 checkout**。這條更陰險：`git pull`／`checkout` 一碰到檔案就把**源檔本身**寫成 CRLF，而 `git status` 依然 `clean`（比對索引時會轉回 LF）——**步驟 2 的可信度檢查看不出來**，然後同步把 CRLF 抄進四家，別台跑同步就看到「內容差異」但其實只有換行。2026-08-03 實測 30 個 repo 有 28 個是 `autocrlf=true` 且無 `.gitattributes`，只是源檔都由雲端硬碟送達、還沒被 checkout 碰過，所以尚未發作。修法是每個 repo 放 `.gitattributes` 寫 `* text=auto eol=lf`（`agent-speak-skill`、`antigravity-lazy-pack` 本來就有，是家規寫法），已補到 10 個含技能的 repo。
-  ⚠️ 未補的還有 18 個 repo（目前都沒有技能被安裝，日後若在那裡新增技能要記得補）。
+  2. **`core.autocrlf=true` 的 checkout**。這條更陰險：`git pull`／`checkout` 一碰到檔案就把**源檔本身**寫成 CRLF，而 `git status` 依然 `clean`（比對索引時會轉回 LF）——**步驟 2 的可信度檢查看不出來**，然後同步把 CRLF 抄進四家，別台跑同步就看到「內容差異」但其實只有換行。2026-08-03 實測 30 個 repo 有 28 個是 `autocrlf=true` 且無 `.gitattributes`，只是源檔都由雲端硬碟送達、還沒被 checkout 碰過，所以尚未發作。修法是每個 repo 放 `.gitattributes` 寫 `* text=auto eol=lf`（`agent-speak-skill`、`antigravity-lazy-pack` 本來就有，是家規寫法），**28 個全數補齊**，並寫進 `project-init` 的 L2 步驟 9，新 repo 一建立就有——事後補是一個一個掃，建 repo 時定好才是根治。
+  ⚠️ **要分辨「committed CRLF」與「checkout 轉出來的 CRLF」，兩者症狀相同、後果相反。**8 個 repo 的工作區是 CRLF，但逐檔比對 `git cat-file blob` 與工作區後確認 **CRLF 存在 git 物件裡**（當初就是以 CRLF 被 commit 的），所以每台電腦 clone 下來都一樣、**不會漂移**——`codex-lazy-packs` 8 個、`opencode-lazy-packs` 5 個、`soil-deck-skills` 2 個 `SKILL.md` 屬這類。真正危險的只有 checkout 轉出來的那種（本機至今未發作）。也因為如此，補 `.gitattributes` 是無痛的：`text=auto` 對已進庫的 CRLF 不會回頭正規化（刻意設計，避免整包 modified），實測 18 個 repo 加完各只多一個未追蹤檔。
 - **只保證副本追得上源檔，不保證源檔是對的**。技能驗的是 bytes 一致，內容本身有沒有壞（例如指到已廢的路徑）不在守備範圍。2026-07-31 抓到的三個實際壞掉的技能，是靠人工讀內容發現的。
 
 ## 同步層級（本專案初始化至第 3 層級）
@@ -144,3 +144,4 @@ skill-sync/
   ⚠️ 過程中我一度誤判成「雲端硬碟餵出過期 bytes」（鐵則 2 的情境）並建議在步驟 2 加 `git update-index --really-refresh`。經比對 commit 時間（源檔 11:19 改、11:30 commit）與盤點時間（10:09）確認**是使用者事後才改的，git 兩次 `clean` 都忠實**，該建議已撤回、未寫進技能。教訓：同一檔案前後讀到不同內容時，「來源被人改了」比「Drive 餵舊 bytes」常見得多，先查 commit 時間再下結論。
 - 2026-08-03（`<電腦B>`）：**階段十一完成**。這台跑唯讀盤點，88 份副本裡 **48 份落後**（12 個技能 × 四家，四家完全同步落後 → 是來源改了沒跟上，不是某一家壞掉）。分成兩類：5 個技能真內容落後（`startup`／`shutdown` 停在 7/29、還留著 7/31 已移除的「步驟 0 四家同步區塊」，`project-init`／`speak`／`file-toolkit` 落後 1–2 天），7 個 `agent-*` **只有 CRLF 差異**（逐行內容完全相同、無 BOM）。追 CRLF 根因時發現兩條路徑，第一條（舊版 `install.ps1` 重寫檔案）當天上午已由 `2525c0a` 根治，第二條（`core.autocrlf=true` 的 checkout，`git status` 照樣 `clean`）尚未有人處理 → 10 個含技能的 repo 補 `.gitattributes`（`* text=auto eol=lf`），加完 `git status` 只有 1 個未追蹤檔、既有檔案零改動，證實工作區本來就全是 LF。接著跑同步：11 個 repo 實 `fetch` 後全 `clean` ＋ `0/0`，272 檔逐檔 `Copy-Item`，**88/88 全 `OK`**、零殘留。三台清單至此完全對齊（四家各 22 個、聯集也是 22，「只有這台沒裝」＝ 0 項）。
   ⚠️ 這次證實一件事：**`handoff.md` 只反映「最後收工那台」，不代表其他台的狀態**。前一筆紀錄寫 `<電腦C>` 12:05 驗到 88/88 全 `OK`，而同一時刻這台有 48 份是落後的——我一開始把兩者當成矛盾、還懷疑那筆紀錄不準，經使用者指正才發現只是不同電腦。跨電腦專案讀 handoff 時要先看「更新者 @ 哪台」。
+- 2026-08-03（`<電腦B>`）：**階段十一收尾，從「補完」升級成「不會再缺」**。使用者提的：既然新 repo 也會缺，就把它加進 `project-init`。補完剩下 18 個 repo（28/28 全數有 `.gitattributes`），並在 `cross-device-agent-skills` 的 `project-init` L2 加入步驟 9（`a88c757`），後續步驟編號順移。動手前先查了那 18 個的工作區狀態，發現 8 個已是 CRLF，逐檔比對 blob 後確認**是 committed CRLF 而非 checkout 轉出來的**，因而不會跨機漂移——這修正了前一筆「28 個 repo 的路徑都開著」的說法：門開著，但至今沒發作過。也確認補 `.gitattributes` 無痛（`text=auto` 不回頭正規化已進庫的 CRLF，實測各只多一個未追蹤檔）。`project-init` 改完立刻跑同步，**88/88 全 `OK`**，四家副本都驗到含新步驟。
