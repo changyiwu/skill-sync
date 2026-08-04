@@ -170,9 +170,42 @@ foreach ($pm in $peers) {
 }
 if (-not $peers) { "🖥️ 清單裡只有這台，沒有別台的資料可比對" }
 
+# 反向指標用：這台四家目錄現在裝了什麼（只掃一次，下面查表）
+function Get-BodyHash($p) {                     # 去掉 name: 那行再 hash → 來源改名不影響比對
+  $b = [Text.Encoding]::UTF8.GetBytes((([IO.File]::ReadAllLines($p) |
+        Where-Object { $_ -notmatch '^\s*name:' }) -join "`n"))
+  [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)) -replace '-', ''
+}
+$installed = @(foreach ($d in $dests.GetEnumerator()) {
+  if (-not (Test-Path $d.Value)) { continue }
+  foreach ($dir in Get-ChildItem $d.Value -Directory) {
+    $f = Join-Path $dir.FullName 'SKILL.md'
+    if (-not (Test-Path $f)) { continue }
+    [pscustomobject]@{
+      Tool = $d.Key; Dir = $dir.Name
+      Name = ((Get-Content $f -TotalCount 12 | Where-Object { $_ -match '^\s*name:' } |
+               Select-Object -First 1) -replace '^\s*name:\s*','').Trim().Trim('"',"'")
+      Body = Get-BodyHash $f
+    }
+  }
+})
+
 foreach ($s in $skills) {
   $n = $s.InstallName
   if ($plan | Where-Object { $_.Name -eq $n }) { continue }
+
+  # (1) 這台其實裝了、只是安裝名對不上？三個訊號任一中即列出（附理由讓人自己判）
+  $srcBody = Get-BodyHash (Join-Path $s.Path 'SKILL.md')
+  $srcLeaf = Split-Path $s.Path -Leaf
+  $hit = @(foreach ($i in $installed) {
+    $why = @()
+    if ($i.Body -eq $srcBody) { $why += '內容相同（不計 name 行）' }
+    if ($i.Dir  -eq $srcLeaf) { $why += '＝來源資料夾名' }
+    if ($i.Name -eq $n)       { $why += 'frontmatter name 相同' }
+    if ($why) { "$($i.Tool)/$($i.Dir)（$($why -join '、')）" }
+  })
+
+  # (2) 別台裝了嗎
   $on = @(foreach ($pm in $peers) {
     foreach ($t in $pm.tools.PSObject.Properties) {
       if ($t.Value.installed -and ($t.Value.skills -contains $n)) {
@@ -180,10 +213,26 @@ foreach ($s in $skills) {
       }
     }
   })
-  if ($on) { "⚠️ 只有這台沒裝：{0} -> {1}（別台有：{2}）" -f $s.Folder, $n, ($on -join '、') }
-  else     { "⏭️ 都沒裝：{0} -> {1}" -f $s.Folder, $n }
+
+  if ($hit)    { "🔀 安裝名對不上：{0} -> {1}　這台其實有：{2}" -f $s.Folder, $n, ($hit -join '、') }
+  elseif ($on) { "⚠️ 只有這台沒裝：{0} -> {1}（別台有：{2}）" -f $s.Folder, $n, ($on -join '、') }
+  else         { "⏭️ 都沒裝：{0} -> {1}" -f $s.Folder, $n }
 }
 ```
+
+### 為什麼「都沒裝」需要這道反向指標
+
+「來源有、四家都沒裝」這個結論是**拿安裝名去目錄裡找**得到的，所以它同時涵蓋兩種完全不同的狀況，而且畫面上一模一樣：真的沒裝，以及**其實裝了、只是叫別的名字**。後者的典型成因是來源改了 frontmatter 的 `name:`——步驟 4 從此再也對不到那個副本，於是**新名字被歸進「都沒裝」（看起來是刻意不裝，沒人會去補），舊名字的副本繼續留著、繼續被 agent 載入、而且永遠不再更新**。比單純落後更難發現，因為兩邊都沒有任何警告。
+
+⚠️ **主訊號一定要是「去掉 `name:` 那行的內容 hash」，不能只比名字或整檔 hash。**改名情境下，副本資料夾名、副本的 `name:`、整檔 hash **三個全都對不上**——只用它們的話，這道檢查對最常見的病例剛好失明。去掉 `name:` 行之後，「純改名」的來源與舊副本會 100% 對上。
+
+另外兩個訊號涵蓋別的情境，一起列著不衝突：**`＝來源資料夾名`** 抓「以前照資料夾名裝的孤兒」（鐵則 4 那種），**`frontmatter name 相同`** 抓「副本資料夾被改名、內部 `name:` 還是對的」。
+
+⚠️ **`Get-BodyHash` 用 `-join "`n"` 等於做了換行正規化，這裡是刻意的，跟步驟 6 不衝突。**兩者的目的相反：步驟 6 是**驗證副本是否等於源檔**，正規化會讓它對「副本被安裝器改寫」失明，所以刻意不做；這裡是**認人**，要在源檔與副本已經不同（改名、甚至換行被改寫）的前提下判斷「這兩份是不是同一個技能」，不正規化反而認不出來。改動任一邊之前先想清楚自己在回答哪個問題。
+
+**三個訊號都是提示，不是判決。**列出理由就是要讓人自己判——尤其兩個技能若共用範本，`＝來源資料夾名` 這種弱訊號可能誤中。確認確實是同一技能後的正解是**刪掉舊名副本、再用新名裝一次**；刪除前一定要先念給使用者確認（同步驟 6 的殘留檔處置）。**不要自動刪**。
+
+已知抓不到的情境：**來源同時改了 `name:` 又大改內容**——三個訊號全失效，那份舊副本仍會靜靜留著。這是這道檢查的邊界，不是 bug。
 
 ⚠️ **別台清單的新舊要講出來，不能只講內容。**清單只有「那台自己跑同步」時才更新，所以一台三個月沒跑同步的電腦，讀到的是三個月前的樣子。不標示時間的話，「別台都沒裝」跟「別台的資料太舊、看不出裝了沒」會長得一模一樣——而後者不該被當成「可以放心不裝」的依據。
 
@@ -345,6 +394,7 @@ if ($manifestDir) {
    Codex          codex-draw       OK（4 檔）
    OpenCode       目錄不存在，略過（這台沒裝）
 📐 僅換行／BOM 差異（內容相同，非落後）：<檔案清單，或「無」>　← 有的話附成因判斷
+🔀 安裝名對不上（這台其實裝了，只是叫別的名字）：skills\08-draw -> draw　現有副本：Claude Code/claude-draw（內容相同（不計 name 行））
 ⚠️ 只有這台沒裝（別台有，可能是漏掉）：claude-draw（<電腦B>/Claude Code）
 ⏭️ 都沒裝（含其他電腦，八成是刻意的）：claude-supabase、claude-ollama
 🗂️ 安裝清單：已更新 <電腦名>.json
@@ -367,6 +417,7 @@ if ($manifestDir) {
 - ❌ 跳過步驟 6 就說「已同步」
 - ❌ 拿**資料夾名**當安裝名（鐵則 4）
 - ❌ 把來源有、但四家都沒裝的技能自動補裝（步驟 4）——**包括「別台有裝」的那些**，那只是提示，不是授權
+- ❌ 自動刪掉「🔀 安裝名對不上」列出的舊副本（步驟 4）——三個訊號是提示不是判決，刪除一律先問
 - ❌ 拿別台的安裝清單當**版本**依據（清單只記有沒有裝，版本一律問 git）
 - ❌ 把 `.skill-install/` commit 進 repo（裡面是真實電腦名，而技能 repo 多半公開）
 - ❌ 目標目錄不存在時自己 `New-Item` 建起來（那台沒裝那個工具，建了只是留垃圾）
