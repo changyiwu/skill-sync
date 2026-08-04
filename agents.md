@@ -69,9 +69,7 @@ skill-sync/
 - **CRLF 三條規則的正本在 `sync-skills/SKILL.md`，不要在本檔另立一份**：`autocrlf=true` 讓步驟 2 失效（步驟 2 的警告）、判斷「只有換行差異」要去 BOM ＋ CRLF→LF 重比（步驟 6 的 `Get-FileFacts`）、量換行不要用 PowerShell 管線（步驟 6）。**理由：技能是在別的專案裡跑的，那時讀不到本檔**——凡是執行時才需要的知識，只寫在這裡等於沒寫
 - **但「工作區 CRLF 的兩種成因」只在本檔**（診斷 repo 用，不在同步流程裡）：用 `git cat-file blob HEAD:<路徑>` 對工作區逐檔比 CRLF 數，兩邊相同＝committed CRLF（每台 clone 都一樣、不會漂移，不用管），只有工作區有＝checkout 轉出來的（危險）。**`git status` 沉默證明不了工作區是 LF**——有 `.gitattributes` 時 git 比對本來就會正規化，本 repo 自己就是「工作區與 blob 都是 CRLF 卻一直 `clean`」的實例
 - **同一檔案前後讀到不同內容時，先查 commit 時間再下結論**。「來源被人改了」比「Drive 餵舊 bytes」常見得多；`git update-index --really-refresh` 的建議已評估後撤回，**不要照著加進技能**
-- **`Copy-Item` 巢狀陷阱**：目標已存在時 `Copy-Item <來源資料夾> <目標資料夾>` 會把來源塞進目標裡面、原本那份一個 byte 都沒動，且不報錯。一律「列舉再逐檔複製」
-- **排除規則要比對相對路徑，不是 `FullName`**：比 `FullName` 會讓放在含 `\build\` 路徑下的專案整包被跳過，而且不報錯
-- **PowerShell 的 `TryParseExact` 綁不上 5 參數多載**，會讓所有電腦被標成「時間格式無法解讀」。一律用 `try/catch` ＋ `ParseExact`
+- **三個 PowerShell 實作坑的正本也在 `sync-skills/SKILL.md`，本檔只留結論**：`Copy-Item <資料夾> <資料夾>` 在目標已存在時會塞成巢狀、原本那份一個 byte 都沒動且不報錯 → 一律「列舉再逐檔複製」（步驟 5）；排除規則比 `FullName` 會讓含 `\build\` 路徑的專案整包被跳過且不報錯 → 一律比相對路徑（步驟 1、5、6）；`TryParseExact` 在 PowerShell 綁不上 5 參數多載，會讓**所有**電腦被誤標成「時間格式無法解讀」→ 用 `try/catch` ＋ `ParseExact`（步驟 4）。**理由與 CRLF 那條不同：這三條 `SKILL.md` 本來就有完整正本，兩邊各存一份只會分歧**——要改成因或實測細節，改那邊
 - **沙箱會攔下含 `Remove-Item` 的整段 PowerShell 指令**（訊息 `system path '/' is blocked`），清暫存檔改用 Bash 的 `rm`
 - **讀 `handoff.md` 先看「更新者 @ 哪台」**：技能副本每台各一份，交接檔描述的永遠是單機狀態，「88/88 全 `OK`」對另一台沒有任何意義
 
