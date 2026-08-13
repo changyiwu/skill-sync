@@ -67,12 +67,24 @@ $skills | Format-Table Folder, InstallName, Valid -AutoSize
 ## 步驟 2：源檔可信度檢查（git）
 
 ```powershell
-git fetch --quiet                                    # 不 fetch 的話，下一行的「落後」永遠測不出來
-git diff HEAD --stat
-git rev-list --left-right --count 'HEAD...@{u}'
+git fetch --quiet 2>&1 | Out-Null                       # 不 fetch 的話，下面的「落後」永遠測不出來
+$dirty = git status --porcelain 2>&1; $dirtyOK = $?      # $? 一定要緊接在指令的下一行取
+$rl    = git rev-list --left-right --count 'HEAD...@{u}' 2>&1; $rlOK = $?
+$count = @($dirty | Where-Object { $_ -notmatch '^warning:' }).Count   # 濾掉 CRLF 警告行
+
+if     (-not $dirtyOK) { "❌ git status 失敗，這個 repo 的可信度檢查「無效」，不是通過：$dirty" }
+elseif (-not $rlOK)    { "⚠️ rev-list 失敗（多半是沒有上游分支），落後偵測無效：$rl" }
+else                   { "未提交 $count 檔　領先/落後 $rl" }
+git diff HEAD --stat                                     # 有未提交改動時才需要看明細
 ```
 
 > `'@{u}'` 在 PowerShell **一定要單引號包起來**，裸的 `@{` 會被當成 hashtable 語法、直接噴解析錯誤。
+
+⚠️ **一定要檢查指令本身有沒有成功——`0` 不等於乾淨。**git 失敗時 `git status --porcelain` 一行都不輸出，計數就是 `0`，跟「真的乾淨」在畫面上**一模一樣**；同一個原因會讓 `rev-list` 一起失效，於是整個步驟 2 從「守門」變成「蓋章放行」，而且**看起來完全正常**。這是階段十二那類「檢查看起來有效、實際失效」的第四個實例。
+
+實測踩過的成因是 **dubious ownership**：`.git` 屬於另一個帳號（例如 Codex sandbox 建立的），git 直接拒絕操作該 repo。處置是 `takeown /R /D Y <repo 路徑>`（非管理員即可）把擁有權收回來，或退一步用 `git config --global --add safe.directory '<repo 路徑>'`；**修好再回來重跑步驟 2，不要跳過**。
+
+⚠️ **`2>&1` 之後一定要濾掉 `^warning:` 行。**`autocrlf=true` 的 repo，每個 CRLF 工作區檔案都會噴一行 `warning: in the working copy of ...`。不濾的話它們會被算進「未提交檔數」，讓一個乾淨的 repo 看起來有幾十個改動，然後你會停下來查一個不存在的問題。
 
 ⚠️ **`git fetch` 不可省略。**`@{u}` 是**本機記錄的**遠端 ref，不 fetch 就是上次 fetch 那一刻的舊快照——於是判讀表裡「落後 > 0 就停下來」這道**唯一的硬關卡永遠不會亮**，而它正是鐵則 2 的執行機制。跨電腦專案裡「別台推了新版、這台還沒 pull」是常態，不是例外。
 
@@ -87,6 +99,7 @@ git rev-list --left-right --count 'HEAD...@{u}'
 | 有**非預期**的改動（不是這次改的） | **停下來**問使用者：這些是什麼？要一起同步嗎？ |
 | **落後 > 0** | **停下來**。磁碟很可能是雲端硬碟餵出的舊 bytes，先 `git pull` 再回來 |
 | 領先 > 0 | 可往下跑，但回報時提醒「這些改動還沒 push」 |
+| **git 指令本身失敗**（`$dirtyOK` 為 `False`） | **停下來**。這個 repo 是「沒通過檢查」，不是「通過了」——見上方警告 |
 | 不是 git repo | 註明「**無法用 git 驗證來源**，只能相信磁碟內容」，問使用者要不要照跑 |
 
 ⚠️ **這道檢查對「換行被改寫」完全無效，要知道自己守不住什麼。**Windows 上 git 預設的 `core.autocrlf=true` 會在 checkout 時把源檔寫成 CRLF，而 `git status` 比對索引時又轉回 LF——所以**磁碟上的源檔已經被改寫了，這裡照樣顯示乾淨**。整道檢查的設計前提是「git 說乾淨＝源檔可信」，這個前提在此失效。
@@ -331,13 +344,17 @@ function Get-FileFacts($p) {
 }
 
 foreach ($rel in $bad) {
+  $tp = Join-Path $p.Target $rel
+  if (-not (Test-Path $tp)) { "  {0,-28} 副本缺這個檔（來源新增的）" -f $rel; continue }   # 先擋掉，否則下面丟例外
   $a = Get-FileFacts (Join-Path $p.Source $rel)
-  $c = Get-FileFacts (Join-Path $p.Target $rel)
+  $c = Get-FileFacts $tp
   $v = if ($a.NormHash -eq $c.NormHash) { '僅換行／BOM 差異' } else { '真內容差異' }
   "  {0,-28} {1}　源:CRLF={2} BOM={3} {4}B ／ 副本:CRLF={5} BOM={6} {7}B" -f
     $rel, $v, $a.CRLF, $a.BOM, $a.Bytes, $c.CRLF, $c.BOM, $c.Bytes
 }
 ```
+
+⚠️ **`$bad` 裡混著「內容不同」與「副本根本沒這個檔」兩種。**`$tMap[$rel]` 對缺檔回傳 `$null`，`-ne` 成立所以它也進 `$bad`——判定沒錯（本來就該複製），但直接餵給 `Get-FileFacts` 會丟兩個 `MethodInvocationException`（`ReadAllBytes` 找不到檔、接著 `GetString` 收到 `$null`）。一批新增檔就是一整螢幕紅字，把真正要看的判定結果淹掉。**誤報與雜訊會訓練人忽略警告，那比沒有檢查更危險**，所以先 `Test-Path` 擋掉並單獨列一行。
 
 判讀與處置：
 
@@ -348,7 +365,12 @@ foreach ($rel in $bad) {
 
 ⚠️ **去 BOM 用「位移」，不要切陣列。**`$b = if (...) { $b[3..($b.Length-1)] } else { [byte[]]@() }` 看起來對，但 PowerShell 的 `if` 表達式會把空陣列展開成 `$null`，於是「只有 BOM 的空檔」會讓 `GetString` 丟 `Value cannot be null`——連 `[byte[]]` 型別標註都救不了。實測踩過，改用三參數多載就沒有這個邊界。
 
-⚠️ **量換行符不要用 PowerShell 管線。**`Out-String` 與管線本身會把輸出重新用 CRLF 接起來，量到的是行數不是內容——實測用 `git cat-file blob ... | Out-String` 數出過「blob 71 對工作區 20」的荒謬結果。上面的寫法直接讀 bytes 所以安全；要跟 git blob 比就用 Bash 的 `grep -c`。
+⚠️ **要拿 git 的內容來比，整條路徑都不能經過 PowerShell 的文字層——管線與 `>` 轉向都會改寫換行。**兩個都踩過：
+
+- **管線／`Out-String`**：會把輸出重新用 CRLF 接起來，量到的是行數不是內容。實測 `git cat-file blob ... | Out-String` 數出過「blob 71 對工作區 20」的荒謬結果
+- **`>` 轉向**（`git show HEAD:<路徑> > $blob` 再 `Get-FileHash`）：`>` 是 `Out-File` 的別名，不是 shell 的位元組轉向——它會**重新編碼並改寫換行**，於是每個檔案都 hash 不符，得到一份假的「真內容差異」清單，然後你會去修一個不存在的落後
+
+上面 `Get-FileFacts` 的寫法直接讀 bytes，所以安全。**要跟 git blob 比就整段換到 Bash**（`git cat-file blob HEAD:<路徑> | md5sum`、`grep -c $'\r'`），不要在 PowerShell 裡想辦法繞。
 
 ## 步驟 7：更新本機安裝清單
 
