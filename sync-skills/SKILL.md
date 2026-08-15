@@ -166,7 +166,7 @@ $plan | Format-Table Tool, Name -AutoSize
 四個安裝目錄是**每台電腦各自一份**，不會跨機同步。所以「這台沒裝」有兩種完全不同的意思，要分開講：**別台裝了、只有這台漏掉**（該補）vs **所有電腦都沒裝**（八成是刻意的）。分辨方式是讀其他電腦留下的清單（寫入見步驟 7）：
 
 ```powershell
-$me = [Environment]::MachineName            # 不可用 $env:COMPUTERNAME，macOS 是空字串且不報錯
+$me = [Environment]::MachineName            # 不可用 Windows 專屬的電腦名環境變數，macOS 是空字串且不報錯
 $manifestDir = $null
 $p = (Get-Item $src).Parent
 while ($p) {
