@@ -9,6 +9,18 @@ description: 技能副本同步助手。當使用者說「同步技能」、「�
 
 適用於任何「原始檔放在專案資料夾、安裝副本散在各工具技能目錄」的技能包，不限定特定專案。來源資料夾名與安裝名**不一樣也沒關係**（例：`skills/08-draw` → `claude-draw`）。
 
+## 執行環境
+
+本技能的 PowerShell 在 **Windows 與 macOS 都要能跑**，一律用 **pwsh 7**（macOS：`brew install --cask powershell`），不可退回 Windows PowerShell 5.1。
+
+路徑寫法三條規則，改動任何一段程式碼都適用：
+
+- 組路徑一律 `Join-Path`，**不要出現字面 `\`**
+- 正則裡的分隔符一律寫 `[\\/]`
+- 需要單一分隔符字元時用 `$sep`（步驟 1 定義）
+
+⚠️ **絕不要用 `$env:COMPUTERNAME`。**它在 macOS 是**空字串、而且不報錯**，步驟 7 的 `"$me.json"` 會生出一個檔名就叫 `.json` 的隱藏檔，別台的步驟 4 永遠讀不到那台裝了什麼——於是那台的技能全被歸進「都沒裝（八成是刻意的）」。一律用 `[Environment]::MachineName`。
+
 ## 鐵則（違反就等於沒同步）
 
 1. **只能用 `Copy-Item` 從磁碟複製**。絕不可用 Write／Edit／heredoc「重建」副本——那會把 Agent context 裡記得的**舊內容**寫成「新版」，而且事後看起來跟正常同步一模一樣，只有逐檔比對抓得到。在「之前已開過、context 很長的舊對話」裡要求同步時風險最高。
@@ -29,6 +41,7 @@ description: 技能副本同步助手。當使用者說「同步技能」、「�
 
 ```powershell
 $src  = (Get-Location).Path
+$sep  = [IO.Path]::DirectorySeparatorChar     # Windows 是 \、macOS 是 /；後面每個步驟都會用到
 $skip = '[\\/](\.git|node_modules|\.venv|venv|site-packages|generated|dist|build|__pycache__)[\\/]'
 $all  = @(Get-ChildItem $src -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue |
           Where-Object { $_.FullName.Substring($src.Length) -notmatch $skip })   # 比相對路徑，不是 FullName
@@ -38,13 +51,13 @@ $pick = if ($sub.Count -gt 0) { $sub } else { @($all) }
 $roots = @(); $skills = @()
 foreach ($f in $pick) {
   $dir = $f.Directory.FullName
-  if ($roots | Where-Object { $dir.StartsWith($_ + '\') }) { continue }   # 被外層技能包住，不算獨立技能
+  if ($roots | Where-Object { $dir.StartsWith($_ + $sep) }) { continue }  # 被外層技能包住，不算獨立技能
   $roots += $dir
   $name = ((Get-Content $f.FullName -TotalCount 12 | Where-Object { $_ -match '^\s*name:' } |
             Select-Object -First 1) -replace '^\s*name:\s*','').Trim().Trim('"',"'")
   $skills += [pscustomobject]@{
     Path        = $dir
-    Folder      = if ($dir -eq $src) { '.' } else { $dir.Substring($src.Length).TrimStart('\') }
+    Folder      = if ($dir -eq $src) { '.' } else { $dir.Substring($src.Length).TrimStart('\', '/') }
     InstallName = $name
     Valid       = ($name -match '^[A-Za-z0-9._-]+$')
   }
@@ -82,7 +95,7 @@ git diff HEAD --stat                                     # 有未提交改動時
 
 ⚠️ **一定要檢查指令本身有沒有成功——`0` 不等於乾淨。**git 失敗時 `git status --porcelain` 一行都不輸出，計數就是 `0`，跟「真的乾淨」在畫面上**一模一樣**；同一個原因會讓 `rev-list` 一起失效，於是整個步驟 2 從「守門」變成「蓋章放行」，而且**看起來完全正常**。這是階段十二那類「檢查看起來有效、實際失效」的第四個實例。
 
-實測踩過的成因是 **dubious ownership**：`.git` 屬於另一個帳號（例如 Codex sandbox 建立的），git 直接拒絕操作該 repo。處置是 `takeown /R /D Y <repo 路徑>`（非管理員即可）把擁有權收回來，或退一步用 `git config --global --add safe.directory '<repo 路徑>'`；**修好再回來重跑步驟 2，不要跳過**。
+實測踩過的成因是 **dubious ownership**：`.git` 屬於另一個帳號（例如 Codex sandbox 建立的），git 直接拒絕操作該 repo。處置分平台：Windows 用 `takeown /R /D Y <repo 路徑>`（非管理員即可）把擁有權收回來，macOS 用 `sudo chown -R "$(whoami)" <repo 路徑>`；兩邊都可退一步用 `git config --global --add safe.directory '<repo 路徑>'`。**修好再回來重跑步驟 2，不要跳過**。
 
 ⚠️ **`2>&1` 之後一定要濾掉 `^warning:` 行。**`autocrlf=true` 的 repo，每個 CRLF 工作區檔案都會噴一行 `warning: in the working copy of ...`。不濾的話它們會被算進「未提交檔數」，讓一個乾淨的 repo 看起來有幾十個改動，然後你會停下來查一個不存在的問題。
 
@@ -128,10 +141,10 @@ Test-Path (Join-Path $src '.gitattributes')
 
 ```powershell
 $dests = [ordered]@{
-  'Claude Code' = "$HOME\.claude\skills"
-  'Codex'       = "$HOME\.agents\skills"
-  'OpenCode'    = "$HOME\.config\opencode\skills"
-  'Antigravity' = "$HOME\.gemini\config\skills"
+  'Claude Code' = Join-Path $HOME '.claude' 'skills'
+  'Codex'       = Join-Path $HOME '.agents' 'skills'
+  'OpenCode'    = Join-Path $HOME '.config' 'opencode' 'skills'
+  'Antigravity' = Join-Path $HOME '.gemini' 'config' 'skills'
 }
 $plan = foreach ($s in $skills) {
   foreach ($d in $dests.GetEnumerator()) {
@@ -153,7 +166,7 @@ $plan | Format-Table Tool, Name -AutoSize
 四個安裝目錄是**每台電腦各自一份**，不會跨機同步。所以「這台沒裝」有兩種完全不同的意思，要分開講：**別台裝了、只有這台漏掉**（該補）vs **所有電腦都沒裝**（八成是刻意的）。分辨方式是讀其他電腦留下的清單（寫入見步驟 7）：
 
 ```powershell
-$me = $env:COMPUTERNAME
+$me = [Environment]::MachineName            # 不可用 $env:COMPUTERNAME，macOS 是空字串且不報錯
 $manifestDir = $null
 $p = (Get-Item $src).Parent
 while ($p) {
@@ -264,7 +277,7 @@ $s = '<來源絕對路徑>'
 $t = Join-Path $dests['Claude Code'] '<安裝名>'
 Get-ChildItem $s -Recurse -File -Force | ForEach-Object {      # 跟步驟 5 同一套寫法
   $rel = $_.FullName.Substring($s.Length + 1)
-  if ("\$rel" -match $skip) { return }
+  if ("$sep$rel" -match $skip) { return }
   $dst = Join-Path $t $rel
   New-Item -ItemType Directory (Split-Path $dst -Parent) -Force | Out-Null
   Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
@@ -279,7 +292,7 @@ Get-ChildItem $s -Recurse -File -Force | ForEach-Object {      # 跟步驟 5 同
 foreach ($p in $plan) {
   Get-ChildItem $p.Source -Recurse -File -Force | ForEach-Object {
     $rel = $_.FullName.Substring($p.Source.Length + 1)
-    if ("\$rel" -match $skip) { return }                  # 沿用步驟 1 的排除規則
+    if ("$sep$rel" -match $skip) { return }                  # 沿用步驟 1 的排除規則
     $dst = Join-Path $p.Target $rel
     New-Item -ItemType Directory (Split-Path $dst -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
@@ -303,11 +316,11 @@ foreach ($p in $plan) {
   $sMap = @{}; $tMap = @{}
   Get-ChildItem $p.Source -Recurse -File -Force | ForEach-Object {
     $rel = $_.FullName.Substring($p.Source.Length + 1)
-    if ("\$rel" -notmatch $skip) { $sMap[$rel] = (Get-FileHash $_.FullName).Hash }
+    if ("$sep$rel" -notmatch $skip) { $sMap[$rel] = (Get-FileHash $_.FullName).Hash }
   }
   Get-ChildItem $p.Target -Recurse -File -Force | ForEach-Object {
     $rel = $_.FullName.Substring($p.Target.Length + 1)
-    if ("\$rel" -notmatch $skip) { $tMap[$rel] = (Get-FileHash $_.FullName).Hash }
+    if ("$sep$rel" -notmatch $skip) { $tMap[$rel] = (Get-FileHash $_.FullName).Hash }
   }
   $bad   = @($sMap.Keys | Where-Object { $tMap[$_] -ne $sMap[$_] })
   $extra = @($tMap.Keys | Where-Object { -not $sMap.ContainsKey($_) })
@@ -370,7 +383,7 @@ foreach ($rel in $bad) {
 - **管線／`Out-String`**：會把輸出重新用 CRLF 接起來，量到的是行數不是內容。實測 `git cat-file blob ... | Out-String` 數出過「blob 71 對工作區 20」的荒謬結果
 - **`>` 轉向**（`git show HEAD:<路徑> > $blob` 再 `Get-FileHash`）：`>` 是 `Out-File` 的別名，不是 shell 的位元組轉向——它會**重新編碼並改寫換行**，於是每個檔案都 hash 不符，得到一份假的「真內容差異」清單，然後你會去修一個不存在的落後
 
-上面 `Get-FileFacts` 的寫法直接讀 bytes，所以安全。**要跟 git blob 比就整段換到 Bash**（`git cat-file blob HEAD:<路徑> | md5sum`、`grep -c $'\r'`），不要在 PowerShell 裡想辦法繞。
+上面 `Get-FileFacts` 的寫法直接讀 bytes，所以安全。**要跟 git blob 比就整段換到 Bash**（`git cat-file blob HEAD:<路徑> | md5sum`、`grep -c $'\r'`），不要在 PowerShell 裡想辦法繞。macOS 沒有 `md5sum`，改用 `md5`（或 `shasum -a 256`）。
 
 ## 步驟 7：更新本機安裝清單
 
@@ -404,7 +417,7 @@ if ($manifestDir) {
 - **一台一個檔，檔名就是電腦名。**各台只寫自己那份，永遠不會互相覆蓋，也不需要合併。
 - **清單放在專案的「上層共用資料夾」，不在任何 repo 裡**（步驟 4 是往上找 `.skill-install/`）。理由是它必須帶真實電腦名才有用，而那些技能 repo 多半是公開的。跨機同步靠雲端硬碟，跟 `handoff.md` 同一套做法。第一次要手動建：`New-Item -ItemType Directory '<專案的上層資料夾>\.skill-install'`。
 
-⚠️ 用 `[IO.File]::WriteAllText(..., UTF8Encoding($false))` 寫、不要用 `Set-Content -Encoding UTF8`——後者在 PowerShell 5.1 會加 BOM。
+⚠️ 用 `[IO.File]::WriteAllText(..., UTF8Encoding($false))` **明確指定無 BOM**，不要依賴 `Set-Content -Encoding UTF8` 的預設值——那個預設各版本不同（5.1 加 BOM、pwsh 7 不加），依賴它等於讓輸出隨執行環境漂移。
 
 ## 步驟 8：回報
 
