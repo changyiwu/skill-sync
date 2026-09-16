@@ -73,6 +73,7 @@ skill-sync/
 - **同一檔案前後讀到不同內容時，先查 commit 時間再下結論**。「來源被人改了」比「Drive 餵舊 bytes」常見得多；`git update-index --really-refresh` 的建議已評估後撤回，**不要照著加進技能**
 - **三個 PowerShell 實作坑的正本也在 `sync-skills/SKILL.md`，本檔只留結論**：`Copy-Item <資料夾> <資料夾>` 在目標已存在時會塞成巢狀、原本那份一個 byte 都沒動且不報錯 → 一律「列舉再逐檔複製」（步驟 5）；排除規則比 `FullName` 會讓含 `\build\` 路徑的專案整包被跳過且不報錯 → 一律比相對路徑（步驟 1、5、6）；`TryParseExact` 在 PowerShell 綁不上 5 參數多載，會讓**所有**電腦被誤標成「時間格式無法解讀」→ 用 `try/catch` ＋ `ParseExact`（步驟 4）。**理由與 CRLF 那條不同：這三條 `SKILL.md` 本來就有完整正本，兩邊各存一份只會分歧**——要改成因或實測細節，改那邊
 - **沙箱會攔下含 `Remove-Item` 的整段 PowerShell 指令**（訊息 `system path '/' is blocked`），清暫存檔改用 Bash 的 `rm`
+- **不要用 Bash heredoc 寫 PowerShell 腳本**：`<<'EOF'` 這種帶引號的形式照理不展開，但實測 `\\` 仍被吃成 `\`——`$skip` 的 `[\\/]` 變成 `[\/]`（只剩正斜線），在 Windows 路徑上**永遠不匹配**，掃描會混進 `generated\`、`site-packages\` 的垃圾技能且**不報錯**。失敗方式與 `SKILL.md` 步驟 1 警告的是同一類。寫 `.ps1` 一律用 Write 工具
 - **讀 `handoff.md` 先看「更新者 @ 哪台」**：技能副本每台各一份，交接檔描述的永遠是單機狀態，「88/88 全 `OK`」對另一台沒有任何意義
 
 ## 同步層級（本專案初始化至第 3 層級）
